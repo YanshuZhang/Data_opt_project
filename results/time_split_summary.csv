@@ -1,0 +1,4 @@
+stage,start_date,end_date,n_days
+train,2018-01-03,2021-12-31,1007
+validation,2022-01-03,2022-12-30,251
+test,2023-01-03,2025-12-30,751
