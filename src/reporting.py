@@ -37,28 +37,14 @@ def write_table(df, path, columns, headers, formats=None):
 
 def make_data_tables(cleaning_summary, split_summary, param_summary):
     write_table(
-        cleaning_summary,
-        config.TABLE_DIR / "data_cleaning_summary.tex",
-        ["item", "value"],
-        ["项目", "数值"],
-        {"value": lambda x: format_float(float(x), 4) if isinstance(x, float) else escape_latex(x)},
-    )
-    write_table(
         split_summary,
         config.TABLE_DIR / "time_split_summary.tex",
         ["stage", "start_date", "end_date", "observations"],
         ["阶段", "开始日期", "结束日期", "观测数"],
     )
-    write_table(
-        param_summary,
-        config.TABLE_DIR / "parameter_estimation_summary.tex",
-        ["item", "value"],
-        ["项目", "数值"],
-        {"value": lambda x: format_float(float(x), 6)},
-    )
 
 
-def make_solver_tables(qp_frontier, socp_frontier, selected):
+def make_solver_tables(qp_frontier, socp_frontier, box_qp_frontier=None, box_socp_frontier=None, modification_summary=None):
     def summarize_frontier(df, parameter_col):
         if df.empty:
             return df
@@ -77,6 +63,15 @@ def make_solver_tables(qp_frontier, socp_frontier, selected):
             ["$\\gamma$", "年化收益", "年化波动", "目标值", "状态", "时间(s)"],
             {"annual_return": format_pct, "annual_std": format_pct, "objective": lambda x: format_float(x, 6), "runtime_sec": lambda x: format_float(x, 4)},
         )
+    if box_qp_frontier is not None and not box_qp_frontier.empty:
+        box = summarize_frontier(box_qp_frontier, "gamma")
+        write_table(
+            box,
+            config.TABLE_DIR / "box_qp_frontier_summary.tex",
+            ["gamma", "annual_return", "annual_std", "objective", "status", "runtime_sec"],
+            ["$\\gamma$", "年化收益", "年化波动", "目标值", "状态", "时间(s)"],
+            {"annual_return": format_pct, "annual_std": format_pct, "objective": lambda x: format_float(x, 6), "runtime_sec": lambda x: format_float(x, 4)},
+        )
     socp = summarize_frontier(socp_frontier, "sigma_max")
     if not socp.empty:
         write_table(
@@ -86,13 +81,30 @@ def make_solver_tables(qp_frontier, socp_frontier, selected):
             ["$\\sigma_{\\max}$", "年化收益", "年化波动", "目标值", "状态", "时间(s)"],
             {"sigma_max": lambda x: format_float(x, 6), "annual_return": format_pct, "annual_std": format_pct, "objective": lambda x: format_float(x, 6), "runtime_sec": lambda x: format_float(x, 4)},
         )
-    write_table(
-        selected,
-        config.TABLE_DIR / "selected_hyperparameters.tex",
-        ["parameter", "selected_value"],
-        ["参数", "验证集选择值"],
-        {"selected_value": lambda x: format_float(float(x), 4)},
-    )
+    if box_socp_frontier is not None and not box_socp_frontier.empty:
+        box_socp = summarize_frontier(box_socp_frontier, "sigma_max")
+        write_table(
+            box_socp,
+            config.TABLE_DIR / "box_socp_frontier_summary.tex",
+            ["sigma_max", "annual_return", "annual_std", "objective", "status", "runtime_sec"],
+            ["$\\sigma_{\\max}$", "年化收益", "年化波动", "目标值", "状态", "时间(s)"],
+            {"sigma_max": lambda x: format_float(x, 6), "annual_return": format_pct, "annual_std": format_pct, "objective": lambda x: format_float(x, 6), "runtime_sec": lambda x: format_float(x, 4)},
+        )
+    if modification_summary is not None and not modification_summary.empty:
+        write_table(
+            modification_summary,
+            config.TABLE_DIR / "realistic_modification_summary.tex",
+            ["model", "gamma", "sigma_max", "annual_return", "annual_std", "max_weight", "active_positions"],
+            ["模型", "$\\gamma$", "$\\sigma_{\\max}$", "年化收益", "年化波动", "最大单资产权重", "持仓数"],
+            {
+                "gamma": lambda x: "--" if pd.isna(x) else format_float(float(x), 4),
+                "sigma_max": lambda x: "--" if pd.isna(x) else format_float(float(x), 6),
+                "annual_return": format_pct,
+                "annual_std": format_pct,
+                "max_weight": format_pct,
+                "active_positions": lambda x: str(int(x)),
+            },
+        )
 
 
 def make_algorithm_tables(admm_summary, pdhg_summary, baseline_objective):
@@ -114,9 +126,7 @@ def make_algorithm_tables(admm_summary, pdhg_summary, baseline_objective):
         ["$\\tau$", "$\\sigma$", "目标值", "目标差", "可行性", "迭代数", "时间(s)"],
         {"tau": lambda x: format_float(x, 3), "sigma": lambda x: format_float(x, 6), "objective": lambda x: format_float(x, 6), "objective_gap": lambda x: f"{x:.2e}", "feasibility": lambda x: f"{x:.2e}", "iterations": lambda x: str(int(x)), "runtime_sec": lambda x: format_float(x, 4)},
     )
-
-
-def make_backtest_tables(metrics_df, failures_df, gamma_sensitivity, param_summary):
+def make_backtest_tables(metrics_df):
     zero = metrics_df[metrics_df["transaction_cost_bps"] == 0].copy()
     write_table(
         zero,
@@ -127,7 +137,7 @@ def make_backtest_tables(metrics_df, failures_df, gamma_sensitivity, param_summa
     )
 
     cost = metrics_df.pivot(index="transaction_cost_bps", columns="strategy", values="annual_return").reset_index()
-    columns = ["transaction_cost_bps"] + [c for c in ["Equal Weight", "QP", "SOCP"] if c in cost.columns]
+    columns = ["transaction_cost_bps"] + [c for c in ["Equal Weight", "QP", "QP Box", "SOCP", "SOCP Box"] if c in cost.columns]
     write_table(
         cost,
         config.TABLE_DIR / "cost_sensitivity.tex",
@@ -135,30 +145,6 @@ def make_backtest_tables(metrics_df, failures_df, gamma_sensitivity, param_summa
         ["交易成本(bps)"] + columns[1:],
         {c: format_pct for c in columns[1:]},
     )
-
-    failures = failures_df.groupby("strategy", as_index=False)["solver_failures"].max()
-    write_table(
-        failures,
-        config.TABLE_DIR / "solver_failures.tex",
-        ["strategy", "solver_failures"],
-        ["策略", "最大失败次数"],
-    )
-
-    worst = gamma_sensitivity.sort_values("sharpe", ascending=True).iloc[0]
-    best = gamma_sensitivity.sort_values("sharpe", ascending=False).iloc[0]
-    cond = param_summary.loc[param_summary["item"] == "condition_number", "value"].iloc[0]
-    failure = pd.DataFrame({
-        "item": ["worst_gamma_on_validation", "worst_validation_sharpe", "best_gamma_on_validation", "best_validation_sharpe", "covariance_condition_number"],
-        "value": [worst["gamma"], worst["sharpe"], best["gamma"], best["sharpe"], cond],
-    })
-    write_table(
-        failure,
-        config.TABLE_DIR / "failure_case.tex",
-        ["item", "value"],
-        ["检查项", "数值"],
-        {"value": lambda x: format_float(float(x), 4)},
-    )
-
 
 def plot_frontier(qp_frontier, socp_frontier):
     plt.figure(figsize=(6, 4))
@@ -174,7 +160,7 @@ def plot_frontier(qp_frontier, socp_frontier):
     plt.close()
 
 
-def plot_qp_weights(weight_table):
+def plot_qp_weights(weight_table, file_name="qp_weights.png"):
     if weight_table.empty:
         return
     avg = weight_table.mean(axis=0).sort_values(ascending=False)
@@ -193,7 +179,7 @@ def plot_qp_weights(weight_table):
     plt.ylabel("Weight")
     plt.legend(loc="upper right", fontsize=7)
     plt.tight_layout()
-    plt.savefig(config.FIGURE_DIR / "qp_weights.png", dpi=200)
+    plt.savefig(config.FIGURE_DIR / file_name, dpi=200)
     plt.close()
 
 
@@ -220,7 +206,7 @@ def plot_algorithm_histories(admm_histories, pdhg_histories):
     plt.close()
 
 
-def plot_backtest(wealth_by_cost, metrics_df, gamma_sensitivity):
+def plot_backtest(wealth_by_cost, metrics_df):
     curves = wealth_by_cost.get(0, {})
     if curves:
         plt.figure(figsize=(7, 4))
@@ -243,16 +229,6 @@ def plot_backtest(wealth_by_cost, metrics_df, gamma_sensitivity):
         plt.tight_layout()
         plt.savefig(config.FIGURE_DIR / "cost_sensitivity.png", dpi=200)
         plt.close()
-
-    if not gamma_sensitivity.empty:
-        plt.figure(figsize=(6, 4))
-        plt.semilogx(gamma_sensitivity["gamma"], gamma_sensitivity["sharpe"], marker="o")
-        plt.xlabel("Gamma")
-        plt.ylabel("Validation Sharpe")
-        plt.tight_layout()
-        plt.savefig(config.FIGURE_DIR / "gamma_sensitivity.png", dpi=200)
-        plt.close()
-
 
 def compile_report():
     tex = config.REPORT_DIR / "portfolio_report.tex"

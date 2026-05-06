@@ -62,9 +62,6 @@ def run_admm_grid(mu, Sigma, gamma=config.CORE_GAMMA):
         histories[rho] = out["history"]
         summaries.append({k: v for k, v in out.items() if k not in ["weights", "history"]})
     summary = pd.DataFrame(summaries)
-    summary.to_csv(config.CSV_DIR / "admm_summary.csv", index=False)
-    for rho, hist in histories.items():
-        hist.to_csv(config.CSV_DIR / f"admm_history_rho_{rho:g}.csv", index=False)
     return summary, histories
 
 
@@ -120,7 +117,4 @@ def run_pdhg_grid(mu, Sigma, gamma=config.CORE_GAMMA):
         histories[tau] = out["history"]
         summaries.append({k: v for k, v in out.items() if k not in ["weights", "history"]})
     summary = pd.DataFrame(summaries)
-    summary.to_csv(config.CSV_DIR / "pdhg_summary.csv", index=False)
-    for tau, hist in histories.items():
-        hist.to_csv(config.CSV_DIR / f"pdhg_history_tau_{tau:g}.csv", index=False)
     return summary, histories

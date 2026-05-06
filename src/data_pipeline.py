@@ -41,7 +41,6 @@ def clean_prices_and_returns(prices):
         "missing_ratio": missing_ratio.values,
         "kept": kept.values,
     })
-    audit.to_csv(config.CSV_DIR / "data_availability_audit.csv", index=False)
 
     clean_prices = prices.loc[:, kept].ffill().bfill().dropna(axis=0, how="any")
     returns = clean_prices.pct_change().dropna(axis=0, how="any")
@@ -70,7 +69,6 @@ def clean_prices_and_returns(prices):
             config.MAX_MISSING_RATIO,
         ],
     })
-    summary.to_csv(config.CSV_DIR / "data_cleaning_summary.csv", index=False)
     return clean_prices, returns_clean, audit, summary
 
 
@@ -89,7 +87,6 @@ def split_returns(returns):
         "end_date": [str(train.index.max().date()), str(val.index.max().date()), str(test.index.max().date())],
         "observations": [len(train), len(val), len(test)],
     })
-    split.to_csv(config.CSV_DIR / "time_split_summary.csv", index=False)
     return train, val, test, split
 
 
@@ -117,5 +114,4 @@ def estimate_parameters(train):
             float(eigvals.max() / eigvals.min()),
         ],
     })
-    stats.to_csv(config.CSV_DIR / "parameter_estimation_summary.csv", index=False)
     return mu, Sigma_stable, stats

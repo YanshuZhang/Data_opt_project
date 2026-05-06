@@ -1,64 +1,24 @@
-# Portfolio Optimization Project
+# dataopt
 
-本文件包完成作业中的必做部分：真实数据获取与清洗、QP/SOCP 商业求解器基准、ADMM、PDHG、真实数据回测、敏感性分析和失败案例说明。不包含 optional extension 和 bonus task。
+这是一个用于投资组合优化与回测的课程/实验项目。主入口是 [src/run_all.py](src/run_all.py)，会依次完成数据处理、参数估计、优化求解、回测、作图和结果导出。
 
-## 1. 环境安装
+## 运行方式
 
-建议使用新的 Python 环境：
 
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-作业要求使用至少一个商业求解器。推荐 MOSEK。安装后需要配置 `mosek.lic`，并确认：
+只需要在项目根目录运行：
 
 ```bash
-python -c "import cvxpy as cp; print(cp.installed_solvers())"
+python src/run_all.py
 ```
 
-输出中应包含 `MOSEK` 或 `GUROBI`。
-
-## 2. 运行完整实验
-
-在项目根目录运行：
+如果你已经有本地价格数据，不想重新下载，可以用：
 
 ```bash
-python src/run_all.py --compile-pdf
+python src/run_all.py --skip-download
 ```
 
-运行后会生成：
 
-```text
-data/                       下载和清洗后的数据
-results/csv/                数值结果 CSV
-results/tables/             LaTeX 表格
-results/figures/            图像结果
-report/portfolio_report.pdf 中文报告 PDF
-```
+## 说明
 
-如果还没有安装商业求解器，但想先检查代码流程，可以临时运行：
-
-```bash
-python src/run_all.py --allow-open-source-fallback --compile-pdf
-```
-
-这只用于调试。正式报告结果应使用 MOSEK 或 Gurobi。
-
-## 3. 主要参数
-
-主要实验参数在 `src/config.py` 中修改，包括资产池、时间区间、训练/验证/测试划分、调参网格、回测窗口长度和调仓频率。
-
-默认资产池为 30 只高流动性美股，默认使用 Yahoo Finance 复权日频价格。
-
-## 4. 报告
-
-中文报告源码在：
-
-```text
-report/portfolio_report.tex
-```
-
-报告不粘贴代码，只说明任务目标、数学模型、算法实现、测试结果和分析。运行 `run_all.py` 后，结果表格和图片会自动写入报告。
+- 已有示例数据放在 [data](data) 目录。
+- 运行完成后的结果会输出到 [results](results)、[data](data) 和 [report](report) 目录。
