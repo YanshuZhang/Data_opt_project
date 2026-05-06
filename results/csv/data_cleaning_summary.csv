@@ -1,0 +1,6 @@
+item,value
+assets_before_cleaning,30.0
+assets_after_cleaning,30.0
+trading_days_after_cleaning,2011.0
+return_observations,2010.0
+maximum_missing_ratio_allowed,0.05

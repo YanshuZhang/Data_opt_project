@@ -1,8 +1,0 @@
-item,value
-assets_before_cleaning,30.0
-assets_after_cleaning,29.0
-price_dates_after_cleaning,2010.0
-return_dates_after_cleaning,2009.0
-max_allowed_missing_ratio,0.05
-winsor_lower_quantile,0.01
-winsor_upper_quantile,0.99

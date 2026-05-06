@@ -1,0 +1,276 @@
+\documentclass[UTF8,12pt]{ctexart}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{enumitem}
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=black}
+\setlist[itemize]{leftmargin=2em,itemsep=0.2em,topsep=0.2em}
+
+\newcommand{\InputTable}[2]{%
+\IfFileExists{#1}{\input{#1}}{\begin{center}\fbox{\parbox{0.88\linewidth}{#2}}\end{center}}}
+
+\newcommand{\PlotFigure}[3]{%
+\IfFileExists{#1}{\begin{figure}[H]\centering\includegraphics[width=#2\linewidth]{#1}\caption{#3}\end{figure}}{\begin{center}\fbox{\parbox{0.88\linewidth}{图像将在运行 \texttt{python src/run\_all.py --compile-pdf} 后生成：#3}}\end{center}}}
+
+\title{期中项目报告}
+\author{张研疏 2200010823}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{任务目标}
+
+本项目研究一个基于真实市场日频数据的长仓投资组合优化问题。给定 $n$ 个流动性较高的股票资产，投资者在每个调仓日选择权重向量
+\[
+    x=(x_1,\ldots,x_n)^\top\in\mathbb{R}^n,
+\]
+其中 $x_i$ 表示投资在第 $i$ 个资产上的资金比例。本文采用全额投资和不做空假设：
+\[
+    \mathbf{1}^\top x=1,\qquad x\ge 0.
+\]
+项目目标包括五个部分：第一，获取和清洗真实市场价格数据，并构造收益率矩阵；第二，用商业求解器求解二次规划和二阶锥规划基准模型；第三，从零实现 ADMM；第四，从零实现 PDHG；第五，在严格时间顺序下进行样本外回测，并比较等权、QP 和 SOCP 策略的收益、风险、换手率和交易成本敏感性。
+
+\section{Task1: 数据访问、清洗与参数估计}
+
+默认资产池为 30 只高流动性美股，时间区间为 2018-01-01 至 2025-12-31。
+代码通过 Yahoo Finance 接口下载日频价格数据，并使用复权收盘价构造收益率。
+数据可用性审计主要检查以下内容：
+\begin{enumerate}
+    \item 接口是否可以正常访问，即是否能成功下载非空价格数据；
+    \item 是否需要 token、访问权限或额度限制。本文代码未使用额外 API token；
+    \item 关键字段是否存在。本文至少需要日期索引和复权收盘价字段；
+    \item 时间跨度是否足够。2018 至 2025 年的日频数据可以支持训练集、验证集、测试集划分，也可以用于滚动回测。
+\end{enumerate}
+
+脚本会对每个资产生成数据审计结果，包括资产代码、缺失比例、首个有效日期、最后有效日期以及是否保留。清洗前资产数量为30.
+
+数据清洗流程如下：
+\begin{enumerate}
+    \item 将所有资产对齐到共同交易日历，使同一行对应同一个交易日；
+    \item 计算每个资产的缺失比例
+    \[
+        m_i=
+        \frac{\#\{t:p_{t,i}\text{ is missing}\}}{N};
+    \]
+    \item 删除缺失比例超过阈值的资产。本文默认阈值为
+    \[
+        \theta_{\mathrm{miss}}=5\%;
+    \]
+    \item 对于退市资产、长期停牌资产或历史数据过短的资产，若其有效样本不足或缺失比例过高，则直接删除；
+    \item 对少量孤立缺失价格使用前向填充；若样本开头仍存在缺失值，则删除对应日期；
+    \item 使用复权收盘价计算收益率；
+    \item 对每个资产的日收益率进行 1\% 和 99\% 分位数截尾，以降低极端异常值对协方差估计的影响。
+\end{enumerate}
+
+清洗后资产数量为30. 设清洗后的价格矩阵为
+\[
+    P=(p_{t,i})\in\mathbb{R}^{N\times n},
+\]
+其中 $p_{t,i}$ 是第 $i$ 个资产在第 $t$ 个交易日的复权收盘价。本文使用简单收益率
+\[
+    r_{t,i}=\frac{p_{t+1,i}-p_{t,i}}{p_{t,i}},
+\]
+得到收益率矩阵
+\[
+    R=(r_{t,i})\in\mathbb{R}^{T\times n}.
+\]
+
+我们使用样本均值和样本协方差为
+\[
+    \hat\mu=\frac{1}{T}\sum_{t=1}^T r_t,
+\]
+\[
+    \hat\Sigma=\frac{1}{T-1}\sum_{t=1}^T (r_t-\hat\mu)(r_t-\hat\mu)^\top.
+\]
+为减少数值问题，实际优化中使用
+\[
+    \hat\Sigma_\epsilon=\hat\Sigma+\epsilon I,
+\]
+其中 $\epsilon=10^{-6}$。这不会改变模型的凸性，并能改善近奇异协方差矩阵造成的求解不稳定。
+
+
+
+
+\section{Task2: 商业求解器基准模型}
+
+本节使用 CVXPY 调用 MOSEK 作为商业求解器。
+
+\subsection{二次规划模型与有效前沿}
+
+本文采用二次效用模型作为 QP 基准：
+\[
+    \min_{x\in\mathbb{R}^n}\; \frac{\gamma}{2}x^\top\hat\Sigma_\epsilon x-\hat\mu^\top x
+\]
+\[
+    \text{s.t.}\quad \mathbf{1}^\top x=1,\qquad x\ge 0.
+\]
+其中 $\gamma>0$ 是风险厌恶参数。目标函数第一项度量组合方差，第二项鼓励提高期望收益。当 $\gamma$ 增大时，最优解更偏向低风险；当 $\gamma$ 较小时，最优解更偏向高收益资产。由于 $\hat\Sigma_\epsilon\succeq 0$，该问题是凸二次规划。
+
+代码在不少于 20 个 $\gamma$ 取值上用CVXPY求解该模型，并记录组合期望收益、标准差、目标值、求解状态、运行时间，如表所示。由点
+\[
+    \left(\sqrt{x^\top\hat\Sigma_\epsilon x},\;\hat\mu^\top x\right)
+\]
+组成的曲线即为 QP 有效前沿。
+
+\InputTable{../results/tables/qp_frontier_summary.tex}{QP求解结果表}
+\PlotFigure{../results/figures/efficient_frontier.png}{0.72}{QP 与 SOCP 组合在风险-收益平面中的位置}
+\PlotFigure{../results/figures/qp_weights.png}{0.72}{不同 $\gamma$ 下 QP 组合权重变化}
+
+\subsection{二阶锥规划模型}
+
+SOCP 基准模型为标准差预算下的收益最大化：
+\[
+    \max_{x\in\mathbb{R}^n}\;\hat\mu^\top x
+\]
+\[
+    \text{s.t.}\quad \|B^\top x\|_2\le \sigma_{\max},\qquad \mathbf{1}^\top x=1,
+    \qquad x\ge 0,
+\]
+其中 $\hat\Sigma_\epsilon=BB^\top$。因此
+\[
+    \|B^\top x\|_2=\sqrt{x^\top\hat\Sigma_\epsilon x}
+\]
+表示组合标准差。该模型的目标函数线性，风险约束是二阶锥约束，因此属于二阶锥规划。代码根据 QP 前沿中的风险范围设置多个 $\sigma_{\max}$，并将 SOCP 解画在同一个风险-收益平面中。如图1所示。
+
+QP 和 SOCP 的经济含义不同：QP 将风险作为惩罚放入目标函数，SOCP 将风险作为硬约束；QP 通过 $\gamma$ 控制风险收益权衡，SOCP 通过 $\sigma_{\max}$ 规定可接受的最大风险。两者都是凸优化问题，但 SOCP 的约束结构更直接体现标准差预算。
+
+\InputTable{../results/tables/socp_frontier_summary.tex}{SOCP 求解结果表}
+
+
+\section{Task3: ADMM 算法}
+
+ADMM 用于从零求解同一个核心 QP：
+\[
+    \min_x\; f(x)=\frac{\gamma}{2}x^\top\hat\Sigma_\epsilon x-\hat\mu^\top x,
+    \qquad \mathbf{1}^\top x=1,\quad x\ge 0.
+\]
+定义概率单纯形
+\[
+    \Delta=\{z\in\mathbb{R}^n:\mathbf{1}^\top z=1,z\ge 0\}.
+\]
+引入分裂变量 $z$ 后，问题写为
+\[
+    \min_{x,z}\;\frac{\gamma}{2}x^\top\hat\Sigma_\epsilon x-\hat\mu^\top x+I_\Delta(z),
+    \qquad x-z=0.
+\]
+采用 scaled ADMM，迭代为
+\[
+    x^{k+1}=(\gamma\hat\Sigma_\epsilon+\rho I)^{-1}\left(\hat\mu+\rho(z^k-u^k)\right),
+\]
+\[
+    z^{k+1}=\operatorname{Proj}_\Delta(x^{k+1}+u^k),
+\]
+\[
+    u^{k+1}=u^k+x^{k+1}-z^{k+1}.
+\]
+其中 $x$ 步是线性方程组求解，$z$ 步是到单纯形的欧氏投影。单纯形投影通过排序阈值法实现，避免调用优化求解器。收敛监控使用原始残差和对偶残差：
+\[
+    r_{\rm prim}^k=\|x^k-z^k\|_2,
+    \qquad
+    r_{\rm dual}^k=\rho\|z^k-z^{k-1}\|_2.
+\]
+实验测试多个 $\rho$，比较最终目标值、残差、迭代次数和运行时间，并与商业求解器在同一 $\gamma$ 下的最优目标值比较。
+
+\InputTable{../results/tables/admm_summary.tex}{ADMM 结果将在运行脚本后自动生成。}
+\PlotFigure{../results/figures/admm_convergence.png}{0.72}{不同 $\rho$ 下 ADMM 残差收敛曲线}
+
+\section{Task4: PDHG 算法}
+
+PDHG 同样求解核心 QP。令
+\[
+    f(x)=\frac{\gamma}{2}x^\top\hat\Sigma_\epsilon x-\hat\mu^\top x,
+\]
+并定义线性算子
+\[
+    Kx=\begin{pmatrix}\mathbf{1}^\top x\\-x\end{pmatrix}.
+\]
+约束可写为
+\[
+    Kx\in\{1\}\times\mathbb{R}^n_-.
+\]
+其 saddle-point 形式为
+\[
+    \min_x\max_{p\in\mathbb{R},q\in\mathbb{R}^n_+}
+    \left\{\frac{\gamma}{2}x^\top\hat\Sigma_\epsilon x-\hat\mu^\top x
+    +p(\mathbf{1}^\top x-1)-q^\top x\right\}.
+\]
+设步长 $\tau>0$ 和 $\sigma>0$ 满足
+\[
+    \tau\sigma\|K\|_2^2<1.
+\]
+由于
+\[
+    K^\top K=\mathbf{1}\mathbf{1}^\top+I,
+\]
+所以 $\|K\|_2^2=n+1$。代码采用 $\sigma=0.9/(\tau(n+1))$，保证步长条件成立。迭代公式为
+\[
+    p^{k+1}=p^k+\sigma(\mathbf{1}^\top\bar{x}^k-1),
+\]
+\[
+    q^{k+1}=\operatorname{Proj}_{\mathbb{R}^n_+}(q^k-\sigma\bar{x}^k),
+\]
+\[
+    x^{k+1}=(I+\tau\gamma\hat\Sigma_\epsilon)^{-1}
+    \left(x^k-\tau(p^{k+1}\mathbf{1}-q^{k+1})+\tau\hat\mu\right),
+\]
+\[
+    \bar{x}^{k+1}=x^{k+1}+(x^{k+1}-x^k).
+\]
+实验测试多个 $\tau$，报告最终目标值、可行性残差、迭代次数和运行时间，并与 ADMM 和商业求解器比较。
+
+\InputTable{../results/tables/pdhg_summary.tex}{PDHG 结果将在运行脚本后自动生成。}
+\PlotFigure{../results/figures/pdhg_convergence.png}{0.72}{不同步长下 PDHG 可行性残差收敛曲线}
+
+\section{Task5: 真实数据回测、敏感性分析与失败案例}
+
+时间划分严格按照日期顺序进行：训练集用于估计模型参数，验证集用于选择风险厌恶参数和 SOCP 风险预算，测试集只用于样本外回测。
+下面的表展示了时间划分的摘要统计信息。
+\InputTable{../results/tables/time_split_summary.tex}
+
+回测采用严格样本外滚动窗口。每个调仓日仅使用该日之前的训练窗口估计 $\hat\mu$ 和 $\hat\Sigma_\epsilon$，然后求解组合权重，并在之后的持有期内计算实际收益。默认训练窗口为 504 个交易日，调仓频率为 20 个交易日。比较策略包括等权组合、QP 优化组合和 SOCP 优化组合。验证集用于选择 QP 的 $\gamma$ 和 SOCP 的风险预算倍率，测试集不参与调参。
+
+设策略日收益为 $r_t^{\rm port}$，累计财富为
+\[
+    W_t=\prod_{s\le t}(1+r_s^{\rm port}).
+\]
+报告指标包括累计收益、年化收益、年化波动率、Sharpe ratio、最大回撤和平均换手率。年化收益和年化波动率分别为
+\[
+    R_{\rm ann}=W_T^{252/T}-1,
+    \qquad
+    \sigma_{\rm ann}=\sqrt{252}\,\operatorname{std}(r_t^{\rm port}).
+\]
+最大回撤定义为
+\[
+    \min_t\left(\frac{W_t}{\max_{s\le t}W_s}-1\right).
+\]
+换手率定义为相邻调仓权重的 $\ell_1$ 距离。交易成本按换手率线性扣减，并测试 0、5、10 和 20 bps 的成本水平。
+
+\InputTable{../results/tables/backtest_metrics_0bps.tex}{零交易成本回测结果将在运行脚本后自动生成。}
+\PlotFigure{../results/figures/backtest_wealth.png}{0.72}{测试集累计财富曲线}
+\InputTable{../results/tables/cost_sensitivity.tex}{交易成本敏感性结果将在运行脚本后自动生成。}
+\PlotFigure{../results/figures/cost_sensitivity.png}{0.72}{不同交易成本下的年化收益变化}
+\PlotFigure{../results/figures/gamma_sensitivity.png}{0.72}{验证集 Sharpe 对 $\gamma$ 的敏感性}
+
+本文记录的失败案例是参数选择不当导致样本外表现退化。具体地，验证集上表现最差的 $\gamma$ 与表现最好的 $\gamma$ 会被记录在表中。如果 $\gamma$ 过小，模型会过度追逐训练期平均收益，容易形成集中持仓；如果 $\gamma$ 过大，组合过度保守，可能牺牲收益。另一个数值层面的限制是样本协方差可能接近奇异，因此代码报告协方差矩阵条件数，并使用 $\epsilon I$ 做稳定化。
+
+\InputTable{../results/tables/failure_case.tex}{失败案例和局限性指标将在运行脚本后自动生成。}
+\InputTable{../results/tables/solver_failures.tex}{回测中的求解失败次数将在运行脚本后自动生成。}
+
+\section{结论}
+
+本项目将真实价格数据、凸优化模型和一阶算法结合起来，形成了一个可复现的投资组合优化实验流程。商业求解器提供 QP 和 SOCP 的基准解；ADMM 和 PDHG 在同一核心 QP 上进行比较，从而可以检验一阶方法的收敛速度、参数敏感性和最终精度；滚动回测进一步检验了模型在样本外市场数据上的表现。实验的主要限制在于样本均值估计噪声较大、协方差估计可能病态、长仓约束会限制对下跌市场的防御能力，以及交易成本和市场冲击仅用线性近似处理。
+
+\begin{thebibliography}{9}
+\bibitem{markowitz} H. Markowitz. Portfolio Selection: Efficient Diversification of Investments. Yale University Press, 2008.
+\bibitem{boyd} S. Boyd and L. Vandenberghe. Convex Optimization. Cambridge University Press, 2004.
+\bibitem{admm} N. Parikh, E. Chu, B. Peleato, and J. Eckstein. Distributed optimization and statistical learning via the alternating direction method of multipliers. Foundations and Trends in Machine Learning, 2011.
+\bibitem{pdhg} A. Chambolle and T. Pock. A first-order primal-dual algorithm for convex problems with applications to imaging. Journal of Mathematical Imaging and Vision, 2011.
+\end{thebibliography}
+
+\end{document}
+

@@ -1,0 +1,8 @@
+numpy>=1.24
+pandas>=2.0
+matplotlib>=3.7
+scipy>=1.10
+yfinance>=0.2.40
+cvxpy>=1.5
+mosek>=10.0
+# Alternative commercial solver: gurobipy>=10.0
